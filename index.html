@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Imagem com som</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:20px;background:#f3f5f4;color:#17211b;font-family:system-ui,sans-serif}main{max-width:480px;margin:auto;padding:20px;border-radius:16px;background:white;box-shadow:0 4px 20px #0001}h1{margin-top:0;font-size:1.5rem}label{display:block;margin:18px 0 6px;font-weight:600}input,button{width:100%;font:inherit}input[type=file],input[type=number]{padding:10px;border:1px solid #bbc9bf;border-radius:8px}button,.download{display:block;margin-top:18px;padding:13px;border:0;border-radius:8px;background:#128c50;color:white;text-align:center;text-decoration:none;font-weight:700}button:disabled{background:#9aaba0}canvas,video{display:block;width:100%;max-width:320px;margin:20px auto 0;border-radius:8px;background:white}#status{min-height:1.5em}.note{font-size:.9rem;color:#4d5c52}[hidden]{display:none!important}
+</style>
+</head>
+<body><main>
+<h1>Imagem com som</h1><p>Crie um vídeo curto com uma imagem e um áudio.</p>
+<label for="image">Imagem</label><input id="image" type="file" accept="image/*">
+<label for="audio">Áudio</label><input id="audio" type="file" accept="audio/*">
+<label for="duration">Duração máxima, em segundos</label><input id="duration" type="number" min="1" max="10" value="5">
+<canvas id="preview" width="512" height="512"></canvas>
+<button id="generate">Gerar vídeo</button>
+<video id="result" controls playsinline hidden></video>
+<a id="download" class="download" hidden>Baixar vídeo</a>
+<p id="status" role="status" aria-live="polite"></p>
+<p class="note">O vídeo é produzido no aparelho, sem envio de arquivos. A imagem fica centralizada sobre fundo branco. O resultado é um vídeo, não uma figurinha nativa do WhatsApp.</p>
+</main>
+<script>
+'use strict';
+const imageInput=document.querySelector('#image'),audioInput=document.querySelector('#audio'),durationInput=document.querySelector('#duration'),canvas=document.querySelector('#preview'),ctx=canvas.getContext('2d'),generateButton=document.querySelector('#generate'),downloadLink=document.querySelector('#download'),status=document.querySelector('#status'),result=document.querySelector('#result');
+let loadedImage=null,imageUrl=null,resultUrl=null;
+function drawFrame(){ctx.fillStyle='#ffffff';ctx.fillRect(0,0,canvas.width,canvas.height);if(!loadedImage)return;const scale=Math.min(canvas.width/loadedImage.naturalWidth,canvas.height/loadedImage.naturalHeight),w=loadedImage.naturalWidth*scale,h=loadedImage.naturalHeight*scale;ctx.drawImage(loadedImage,(canvas.width-w)/2,(canvas.height-h)/2,w,h);}
+function clearResult(){result.pause();result.removeAttribute('src');result.load();result.hidden=true;downloadLink.hidden=true;downloadLink.removeAttribute('href');if(resultUrl){URL.revokeObjectURL(resultUrl);resultUrl=null;}}
+drawFrame();
+imageInput.addEventListener('change',()=>{loadedImage=null;drawFrame();clearResult();if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl=null;const file=imageInput.files[0];if(!file)return;const url=URL.createObjectURL(file);imageUrl=url;const image=new Image();image.onload=()=>{if(imageUrl!==url)return;loadedImage=image;drawFrame();status.textContent='Imagem carregada.';};image.onerror=()=>{if(imageUrl!==url)return;status.textContent='Não foi possível abrir essa imagem.';};image.src=url;});
+for(const input of [audioInput,durationInput])input.addEventListener('change',clearResult);
+generateButton.addEventListener('click',async()=>{
+const audioFile=audioInput.files[0],seconds=Number(durationInput.value);if(!loadedImage||!audioFile){status.textContent='Escolha uma imagem e um arquivo de áudio.';return;}if(!Number.isFinite(seconds)||seconds<1||seconds>10){status.textContent='Escolha uma duração entre 1 e 10 segundos.';return;}if(!window.MediaRecorder||!canvas.captureStream){status.textContent='Este navegador não permite gerar o vídeo. Tente o Chrome atualizado.';return;}
+const formats=['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4','video/webm;codecs=vp8,opus','video/webm'].filter(type=>MediaRecorder.isTypeSupported(type));if(!formats.length){status.textContent='Nenhum formato de gravação compatível foi encontrado.';return;}
+for(const el of [generateButton,imageInput,audioInput,durationInput])el.disabled=true;clearResult();let audioContext,videoStream,destination,recorder,source,frameTimer,stopTimer;
+try{status.textContent='Preparando áudio e vídeo...';const AudioContextClass=window.AudioContext||window.webkitAudioContext;if(!AudioContextClass)throw new Error('Áudio não suportado.');audioContext=new AudioContextClass();await audioContext.resume();const buffer=await audioContext.decodeAudioData(await audioFile.arrayBuffer());const length=Math.min(seconds,buffer.duration);if(!(length>0))throw new Error('Áudio vazio.');source=audioContext.createBufferSource();source.buffer=buffer;destination=audioContext.createMediaStreamDestination();source.connect(destination);drawFrame();videoStream=canvas.captureStream(30);const stream=new MediaStream([...videoStream.getVideoTracks(),...destination.stream.getAudioTracks()]);for(const mimeType of formats){try{recorder=new MediaRecorder(stream,{mimeType,videoBitsPerSecond:2500000});break;}catch(e){/* tenta o próximo formato */}}if(!recorder)throw new Error('Não foi possível iniciar um gravador compatível.');
+const chunks=[];recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};const finished=new Promise((resolve,reject)=>{recorder.onstop=resolve;recorder.onerror=()=>reject(new Error('Falha ao gravar o vídeo.'));});finished.catch(()=>{});recorder.start(250);drawFrame();frameTimer=setInterval(drawFrame,1000/30);source.onended=()=>{if(recorder.state!=='inactive')recorder.stop();};source.start(0,0,length);stopTimer=setTimeout(()=>{if(recorder.state!=='inactive')recorder.stop();},length*1000+500);status.textContent='Gerando vídeo. Mantenha esta página aberta...';await finished;const mimeType=recorder.mimeType||chunks[0]?.type||'video/webm';const blob=new Blob(chunks,{type:mimeType});if(!blob.size)throw new Error('O vídeo gerado está vazio.');resultUrl=URL.createObjectURL(blob);const extension=mimeType.startsWith('video/mp4')?'mp4':'webm';result.src=resultUrl;result.hidden=false;downloadLink.href=resultUrl;downloadLink.download=`imagem-com-som.${extension}`;downloadLink.textContent=`Baixar vídeo ${extension.toUpperCase()}`;downloadLink.hidden=false;status.textContent='Vídeo pronto para assistir e baixar.';
+}catch(error){status.textContent=`Não foi possível gerar o vídeo: ${error.message}`;}finally{clearInterval(frameTimer);clearTimeout(stopTimer);if(recorder&&recorder.state!=='inactive')recorder.stop();if(source){source.onended=null;try{source.stop();}catch(e){}}if(videoStream)videoStream.getTracks().forEach(track=>track.stop());if(destination)destination.stream.getTracks().forEach(track=>track.stop());if(audioContext)await audioContext.close().catch(()=>{});for(const el of [generateButton,imageInput,audioInput,durationInput])el.disabled=false;}
+});
+</script></body></html>
